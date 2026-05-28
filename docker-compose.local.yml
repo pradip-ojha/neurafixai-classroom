@@ -1,0 +1,302 @@
+x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT:-local}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://neurafix:neurafix_local_password@postgres:5432/neurafix_school_os}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL:-amqp://guest:guest@rabbitmq:5672//}
+  CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-before-production-32-byte-minimum}
+  JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+  ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-15}
+  REFRESH_TOKEN_DAYS: ${REFRESH_TOKEN_DAYS:-30}
+  EMAIL_VERIFICATION_HOURS: ${EMAIL_VERIFICATION_HOURS:-24}
+  PASSWORD_RESET_MINUTES: ${PASSWORD_RESET_MINUTES:-30}
+  LOGIN_LOCKOUT_MINUTES: ${LOGIN_LOCKOUT_MINUTES:-15}
+  MAX_FAILED_LOGIN_ATTEMPTS: ${MAX_FAILED_LOGIN_ATTEMPTS:-5}
+  AI_SERVICE_INTERNAL_URL: ${AI_SERVICE_INTERNAL_URL:-http://ai_service:8001}
+  AI_INTERNAL_SERVICE_TOKEN: ${AI_INTERNAL_SERVICE_TOKEN:-change-this-internal-ai-token}
+  OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-neurafix-school-os-local}
+  OBJECT_STORAGE_PUBLIC_BASE_URL: ${OBJECT_STORAGE_PUBLIC_BASE_URL:-http://localhost:9000/neurafix-school-os-local}
+  SIGNED_URL_SECRET: ${SIGNED_URL_SECRET:-change-this-signed-url-secret}
+  SIGNED_URL_EXPIRY_SECONDS: ${SIGNED_URL_EXPIRY_SECONDS:-900}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+  OPENAI_COMPATIBLE_API_KEY: ${OPENAI_COMPATIBLE_API_KEY:-}
+  OPENAI_COMPATIBLE_BASE_URL: ${OPENAI_COMPATIBLE_BASE_URL:-}
+  OPENAI_COMPATIBLE_DEFAULT_MODEL: ${OPENAI_COMPATIBLE_DEFAULT_MODEL:-gpt-4.1-mini}
+  PINECONE_API_KEY: ${PINECONE_API_KEY:-}
+  PINECONE_INDEX: ${PINECONE_INDEX:-}
+
+services:
+  frontend:
+    build:
+      context: ./apps/frontend
+      dockerfile: Dockerfile
+    command: npm run dev
+    environment:
+      NEXT_PUBLIC_MAIN_API_URL: http://localhost:8000
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    volumes:
+      - ./apps/frontend:/app
+      - frontend_node_modules:/app/node_modules
+    depends_on:
+      main_backend:
+        condition: service_healthy
+
+  main_backend:
+    build:
+      context: ./apps/main_backend
+      dockerfile: Dockerfile
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment: *backend-env
+    ports:
+      - "${MAIN_BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ./apps/main_backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ai_service:
+    build:
+      context: ./apps/ai_service
+      dockerfile: Dockerfile
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+    environment: *backend-env
+    ports:
+      - "${AI_SERVICE_PORT:-8001}:8001"
+    volumes:
+      - ./apps/ai_service:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health').read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  celery_general_worker:
+    build:
+      context: ./apps/main_backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app worker -Q high_priority,default,low_priority --loglevel=INFO
+    environment: *backend-env
+    volumes:
+      - ./apps/main_backend:/app
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_ai_worker:
+    build:
+      context: ./apps/main_backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app worker -Q ai_tasks --loglevel=INFO
+    environment: *backend-env
+    volumes:
+      - ./apps/main_backend:/app
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_rag_worker:
+    build:
+      context: ./apps/main_backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app worker -Q rag_ingestion --loglevel=INFO
+    environment: *backend-env
+    volumes:
+      - ./apps/main_backend:/app
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_embedding_worker:
+    build:
+      context: ./apps/main_backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app worker -Q embedding_tasks --loglevel=INFO
+    environment: *backend-env
+    volumes:
+      - ./apps/main_backend:/app
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_ocr_worker:
+    build:
+      context: ./apps/main_backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app worker -Q ocr_tasks --loglevel=INFO
+    environment: *backend-env
+    volumes:
+      - ./apps/main_backend:/app
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_pdf_worker:
+    build:
+      context: ./apps/main_backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app worker -Q pdf_tasks --loglevel=INFO
+    environment: *backend-env
+    volumes:
+      - ./apps/main_backend:/app
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_answer_checking_worker:
+    build:
+      context: ./apps/main_backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app worker -Q answer_checking --loglevel=INFO
+    environment: *backend-env
+    volumes:
+      - ./apps/main_backend:/app
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_report_worker:
+    build:
+      context: ./apps/main_backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app worker -Q report_queue --loglevel=INFO
+    environment: *backend-env
+    volumes:
+      - ./apps/main_backend:/app
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_email_worker:
+    build:
+      context: ./apps/main_backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app worker -Q email_queue --loglevel=INFO
+    environment: *backend-env
+    volumes:
+      - ./apps/main_backend:/app
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_notification_worker:
+    build:
+      context: ./apps/main_backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app worker -Q notification_queue --loglevel=INFO
+    environment: *backend-env
+    volumes:
+      - ./apps/main_backend:/app
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_analytics_worker:
+    build:
+      context: ./apps/main_backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app worker -Q analytics_queue --loglevel=INFO
+    environment: *backend-env
+    volumes:
+      - ./apps/main_backend:/app
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_beat_scheduler:
+    build:
+      context: ./apps/main_backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app beat --loglevel=INFO
+    environment: *backend-env
+    volumes:
+      - ./apps/main_backend:/app
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-neurafix_school_os}
+      POSTGRES_USER: ${POSTGRES_USER:-neurafix}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-neurafix_local_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-neurafix} -d ${POSTGRES_DB:-neurafix_school_os}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  frontend_node_modules:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
